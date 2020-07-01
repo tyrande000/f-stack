@@ -590,7 +590,7 @@ tooshort:
 	dchg = (odst.s_addr != ip->ip_dst.s_addr);
 	ifp = m->m_pkthdr.rcvif;
 
-	if (m->m_flags & M_FASTFWD_OURS) {
+	if (m->m_flags & M_FASTFWD_OURS || 1) { //tyrande000
 		m->m_flags &= ~M_FASTFWD_OURS;
 		goto ours;
 	}

@@ -71,9 +71,11 @@
 #if defined(INET) || defined(INET6)
 #include <netinet/in.h>
 #include <netinet/in_var.h>
+#include <netinet/ip.h>
 #include <netinet/if_ether.h>
 #include <netinet/ip_carp.h>
 #include <netinet/ip_var.h>
+#include <netinet/tcp.h>
 #endif
 #ifdef INET6
 #include <netinet6/nd6.h>
@@ -119,6 +121,51 @@ static	int ether_requestencap(struct ifnet *, struct if_encap_req *);
 	(bcmp(etherbroadcastaddr, (addr), ETHER_ADDR_LEN) == 0)
 
 #define senderr(e) do { error = (e); goto bad;} while (0)
+
+static int
+l4_protocol_filter(struct mbuf *m)
+{
+	struct ifnet *ifp = m->m_pkthdr.rcvif;
+	struct ether_header *eh;
+	u_short etype;
+	
+	eh = mtod(m, struct ether_header *);
+	etype = ntohs(eh->ether_type);
+	
+	if (etype == ETHERTYPE_IP){
+		struct ip *ip = NULL;
+		int hdr_len;
+		
+		ip = mtodo(m, ETHER_HDR_LEN);
+		hdr_len = (ip->ip_hl & 0x0f) << 2;
+		
+		if (m->m_pkthdr.len < ETHER_HDR_LEN + sizeof(struct ip))
+			return -1;
+			
+		if (m->m_len < ETHER_HDR_LEN + sizeof(struct ip))
+			return -1;
+			
+		if (ip->ip_p == IPPROTO_TCP){
+			if (m->m_len < ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct tcphdr))
+				return -1;
+			
+			struct tcphdr *th = NULL;
+			
+			th = mtodo(m, ETHER_HDR_LEN + hdr_len);
+			
+			if (th->th_dport == ntohs(80) || 
+				th->th_sport == ntohs(80)){
+				insert_ipether_map(ip->ip_src.s_addr, eh->ether_shost, ifp);
+				insert_ipether_map(ip->ip_dst.s_addr, eh->ether_dhost, NULL);
+				return 0;
+			}
+		}else if (ip->ip_p == IPPROTO_UDP){
+			
+		}
+	}
+	
+	return -1;
+}
 
 static void
 update_mbuf_csumflags(struct mbuf *src, struct mbuf *dst)
@@ -195,12 +242,12 @@ ether_requestencap(struct ifnet *ifp, struct if_encap_req *req)
 	return (0);
 }
 
-
 static int
 ether_resolve_addr(struct ifnet *ifp, struct mbuf *m,
 	const struct sockaddr *dst, struct route *ro, u_char *phdr,
 	uint32_t *pflags, struct llentry **plle)
 {
+	u_char *dhost;
 	struct ether_header *eh;
 	uint32_t lleflags = 0;
 	int error = 0;
@@ -215,10 +262,18 @@ ether_resolve_addr(struct ifnet *ifp, struct mbuf *m,
 	switch (dst->sa_family) {
 #ifdef INET
 	case AF_INET:
-		if ((m->m_flags & (M_BCAST | M_MCAST)) == 0)
+		if ((m->m_flags & (M_BCAST | M_MCAST)) == 0){
+			etype = htons(ETHERTYPE_IP);
+			dhost = find_ipether_l2addr(((const struct sockaddr_in *)dst)->sin_addr.s_addr);
+
+			memcpy(&eh->ether_type, &etype, sizeof(etype));
+			memcpy(eh->ether_shost, IF_LLADDR(ifp), ETHER_ADDR_LEN);
+			memcpy(eh->ether_dhost, dhost, ETHER_ADDR_LEN);
+#ifdef tyrande000
 			error = arpresolve(ifp, 0, m, dst, phdr, &lleflags,
 			    plle);
-		else {
+#endif
+		}else {
 			if (m->m_flags & M_BCAST)
 				memcpy(eh->ether_dhost, ifp->if_broadcastaddr,
 				    ETHER_ADDR_LEN);
@@ -293,6 +348,8 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 
 	phdr = NULL;
 	pflags = 0;
+	
+#ifdef tyrande000
 	if (ro != NULL) {
 		/* XXX BPF uses ro_prepend */
 		if (ro->ro_prepend != NULL) {
@@ -320,6 +377,7 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 		}
 		rt0 = ro->ro_rt;
 	}
+#endif
 
 #ifdef MAC
 	error = mac_ifnet_check_transmit(ifp, m);
@@ -400,13 +458,15 @@ ether_output(struct ifnet *ifp, struct mbuf *m,
 			if_inc_counter(ifp, IFCOUNTER_IQDROPS, 1);
 	}
 
-       /*
+#ifdef tyrande000
+    /*
 	* Bridges require special output handling.
 	*/
 	if (ifp->if_bridge) {
 		BRIDGE_OUTPUT(ifp, m, error);
 		return (error);
 	}
+#endif
 
 #if defined(INET) || defined(INET6)
 	if (ifp->if_carp &&
@@ -599,13 +659,17 @@ ether_input_internal(struct ifnet *ifp, struct mbuf *m)
 	 * and the frame should be delivered locally.
 	 */
 	if (ifp->if_bridge != NULL) {
-		m->m_flags &= ~M_PROMISC;
-		BRIDGE_INPUT(ifp, m);
-		if (m == NULL) {
-			CURVNET_RESTORE();
-			return;
+		int ret = l4_protocol_filter(m);
+		
+		if(ret < 0){
+			m->m_flags &= ~M_PROMISC;
+			BRIDGE_INPUT(ifp, m);
+			if (m == NULL) {
+				CURVNET_RESTORE();
+				return;
+			}
+			eh = mtod(m, struct ether_header *);
 		}
-		eh = mtod(m, struct ether_header *);
 	}
 
 #if defined(INET) || defined(INET6)
@@ -804,6 +868,7 @@ ether_demux(struct ifnet *ifp, struct mbuf *m)
 		return;
 	}
 
+#ifdef tyrande000
 	/*
 	 * Pass promiscuously received frames to the upper layer if the user
 	 * requested this by setting IFF_PPROMISC. Otherwise, drop them.
@@ -812,6 +877,7 @@ ether_demux(struct ifnet *ifp, struct mbuf *m)
 		m_freem(m);
 		return;
 	}
+#endif
 
 	/*
 	 * Reset layer specific mbuf flags to avoid confusing upper layers.

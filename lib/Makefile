@@ -23,11 +23,11 @@ F-STACK_VERSION=1.21
 
 HOST_OS:=$(shell uname -s)
 
-#DEBUG=-O0 -gdwarf-2 -g3 -Wno-format-truncation
+DEBUG=-O0 -gdwarf-2 -g3 -Wno-format-truncation
 
-FF_KNI=1
+#FF_KNI=1
 #FF_NETGRAPH=1
-#FF_IPFW=1
+FF_IPFW=1
 #FF_USE_PAGE_ARRAY=1
 FF_INET6=1
 
@@ -355,6 +355,7 @@ NET_SRCS+=		 \
 	raw_usrreq.c	 \
 	route.c		 \
 	rtsock.c         \
+	rbtree.c         \
 	slcompress.c
 
 ifdef FF_NETGRAPH

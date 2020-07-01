@@ -60,6 +60,7 @@
 #include <net/route_var.h>
 #include <net/vnet.h>
 #include <net/flowtable.h>
+#include <net/rbtree.h>
 
 #ifdef RADIX_MPATH
 #include <net/radix_mpath.h>
@@ -93,6 +94,7 @@ extern void sctp_addr_change(struct ifaddr *ifa, int cmd);
 #endif /* SCTP */
 #endif
 
+static struct rb_root	g_if_ipether = RB_ROOT;
 
 /* This is read-only.. */
 u_int rt_numfibs = RT_NUMFIBS;
@@ -2324,3 +2326,102 @@ rt_newaddrmsg_fib(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt,
 	}
 }
 
+/* add by tyrande000 */
+typedef struct if_ipether_map
+{
+	struct rb_node	node;
+	
+	in_addr_t		l3_addr;
+	u_char			l2_addr[6];//ETHER_ADDR_LEN
+	
+	struct ifnet 	*ifp;		//assigned ptr should valid until dead
+	
+	int				trust;
+} *if_ipether_map_t;
+
+static if_ipether_map_t
+do_find_ipether_map(in_addr_t s_addr)
+{
+	struct rb_node *node = g_if_ipether.rb_node;
+	
+    while (node) {
+        if_ipether_map_t this = __containerof(node, struct if_ipether_map, node);
+        if (s_addr < this->l3_addr) {
+            node = node->rb_left;
+        }else if (s_addr > this->l3_addr) {
+            node = node->rb_right;
+        }else {
+            return this;
+        }
+    }
+	
+    return NULL;
+}
+
+static void
+do_insert_ipether_map(if_ipether_map_t newone)
+{
+	struct rb_node **new = &(g_if_ipether.rb_node), *parent = NULL;
+	
+    while (*new) {
+        if_ipether_map_t this = __containerof(*new, struct if_ipether_map, node);
+        parent = *new;
+		
+		if (newone->l3_addr < this->l3_addr) {
+            new = &((*new)->rb_left);
+        }else if (newone->l3_addr > this->l3_addr) {
+            new = &((*new)->rb_right);
+        }else {
+            KASSERT(0, ("do_insert_ipether_map duplicate"));
+        }
+    }
+	
+	rb_link_node(&newone->node, parent, new);
+    rb_insert_color(&newone->node, &g_if_ipether);
+}
+
+void
+insert_ipether_map(in_addr_t l3_addr, u_char *l2_addr, struct ifnet *ifp)
+{
+	if_ipether_map_t mapp = do_find_ipether_map(l3_addr);
+	
+	if(mapp){
+		//TODO: l3 l2 addr maybe change		
+	}else{
+		mapp = malloc(sizeof(struct if_ipether_map), M_RTABLE, M_NOWAIT|M_ZERO);
+		
+		if(!mapp){
+			return;
+		}
+		
+		mapp->l3_addr = l3_addr;
+		mapp->ifp = ifp;
+		bcopy(l2_addr, mapp->l2_addr, 6);
+		
+		do_insert_ipether_map(mapp);
+	}
+}
+
+struct ifnet *
+find_ipether_ifp(in_addr_t l3_addr)
+{
+	if_ipether_map_t mapp = do_find_ipether_map(l3_addr);
+
+	if(!mapp){
+		return NULL;
+	}
+				
+	return mapp->ifp;
+}
+
+u_char *
+find_ipether_l2addr(in_addr_t l3_addr)
+{
+	if_ipether_map_t mapp = do_find_ipether_map(l3_addr);
+			
+	if(!mapp){
+		KASSERT(0, ("find_ipether_l2addr could never be null"));
+	}
+				
+	return mapp->l2_addr;
+}

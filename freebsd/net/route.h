@@ -493,6 +493,15 @@ int	rib_lookup_info(uint32_t, const struct sockaddr *, uint32_t, uint32_t,
 	    struct rt_addrinfo *);
 void	rib_free_info(struct rt_addrinfo *info);
 
+void
+insert_ipether_map(in_addr_t l3_addr, u_char *l2_addr, struct ifnet *ifp);
+
+struct ifnet *
+find_ipether_ifp(in_addr_t l3_addr);
+
+u_char *
+find_ipether_l2addr(in_addr_t l3_addr);
+
 #endif
 
 #endif

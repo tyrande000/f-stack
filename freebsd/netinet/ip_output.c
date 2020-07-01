@@ -218,15 +218,15 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	int hlen = sizeof (struct ip);
 	int mtu;
 	int error = 0;
-	struct sockaddr_in *dst;
-	const struct sockaddr_in *gw;
+	struct sockaddr_in *dst = NULL;
+	struct sockaddr_in gw;
 	struct in_ifaddr *ia;
-	int isbroadcast;
+	int isbroadcast = 0;
 	uint16_t ip_len, ip_off;
 	struct route iproute;
-	struct rtentry *rte;	/* cache for ro->ro_rt */
+	struct rtentry *rte = NULL;	/* cache for ro->ro_rt */
 	uint32_t fibnum;
-	int have_ia_ref;
+	int have_ia_ref = 0;
 #ifdef IPSEC
 	int no_route_but_check_spd = 0;
 #endif
@@ -272,6 +272,7 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		hlen = ip->ip_hl << 2;
 	}
 
+#ifdef tyrande000
 	/*
 	 * dst/gw handling:
 	 *
@@ -279,7 +280,8 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 	 * gw is readonly but can point either to dst OR rt_gateway,
 	 * therefore we need restore gw if we're redoing lookup.
 	 */
-	gw = dst = (struct sockaddr_in *)&ro->ro_dst;
+	dst = (struct sockaddr_in *)&ro->ro_dst;
+	gw = *dst;
 	fibnum = (inp != NULL) ? inp->inp_inc.inc_fibnum : M_GETFIB(m);
 	rte = ro->ro_rt;
 	if (rte == NULL) {
@@ -288,6 +290,23 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		dst->sin_len = sizeof(*dst);
 		dst->sin_addr = ip->ip_dst;
 	}
+#endif
+
+	ifp = find_ipether_ifp(ip->ip_dst.s_addr);
+	
+	if(!ifp){
+		error = EHOSTUNREACH;
+		goto bad;
+	}
+	
+	ia = ifatoia(ifp->if_addr);
+	
+	bzero(&gw, sizeof(gw));
+	gw.sin_family = AF_INET;
+	gw.sin_len = sizeof(gw);
+	gw.sin_addr = ip->ip_dst;
+	
+#ifdef tyrande000
 again:
 	/*
 	 * Validate route against routing table additions;
@@ -314,7 +333,7 @@ again:
 		if (ro->ro_lle)
 			LLE_FREE(ro->ro_lle);	/* zeros ro_lle */
 		ro->ro_lle = (struct llentry *)NULL;
-	}
+	}	
 	ia = NULL;
 	have_ia_ref = 0;
 	/*
@@ -400,12 +419,13 @@ again:
 		counter_u64_add(rte->rt_pksent, 1);
 		rt_update_ro_flags(ro);
 		if (rte->rt_flags & RTF_GATEWAY)
-			gw = (struct sockaddr_in *)rte->rt_gateway;
+			gw = *(struct sockaddr_in *)rte->rt_gateway;
 		if (rte->rt_flags & RTF_HOST)
 			isbroadcast = (rte->rt_flags & RTF_BROADCAST);
 		else
-			isbroadcast = in_broadcast(gw->sin_addr, ifp);
+			isbroadcast = in_broadcast(gw.sin_addr, ifp);
 	}
+#endif
 
 	/*
 	 * Calculate MTU.  If we have a route that is up, use that,
@@ -418,7 +438,7 @@ again:
 	/* Catch a possible divide by zero later. */
 	KASSERT(mtu > 0, ("%s: mtu %d <= 0, rte=%p (rt_flags=0x%08x) ifp=%p",
 	    __func__, mtu, rte, (rte != NULL) ? rte->rt_flags : 0, ifp));
-
+	
 	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
 		m->m_flags |= M_MCAST;
 		/*
@@ -426,7 +446,7 @@ again:
 		 * still points to the address in "ro".  (It may have been
 		 * changed to point to a gateway address, above.)
 		 */
-		gw = dst;
+		gw = *dst;
 		/*
 		 * See if the caller provided any multicast options
 		 */
@@ -574,7 +594,7 @@ sendit:
 	ip = mtod(m, struct ip *);
 	hlen = ip->ip_hl << 2;
 #endif /* IPSEC */
-
+#ifdef tyrande000
 	/* Jump over all PFIL processing if hooks are not active. */
 	if (PFIL_HOOKED(&V_inet_pfil_hook)) {
 		switch (ip_output_pfil(&m, ifp, inp, dst, &fibnum, &error)) {
@@ -592,12 +612,13 @@ sendit:
 				ifa_free(&ia->ia_ifa);
 			ro->ro_prepend = NULL;
 			rte = NULL;
-			gw = dst;
+			gw = *dst;
 			ip = mtod(m, struct ip *);
 			goto again;
 
 		}
 	}
+#endif
 
 	/* 127/8 must not appear on wire - RFC1122. */
 	if ((ntohl(ip->ip_dst.s_addr) >> IN_CLASSA_NSHIFT) == IN_LOOPBACKNET ||
@@ -659,7 +680,7 @@ sendit:
 		m_clrprotoflags(m);
 		IP_PROBE(send, NULL, NULL, ip, ifp, ip, NULL);
 		error = (*ifp->if_output)(ifp, m,
-		    (const struct sockaddr *)gw, ro);
+		    (const struct sockaddr *)&gw, ro);
 		goto done;
 	}
 
@@ -695,7 +716,7 @@ sendit:
 
 			IP_PROBE(send, NULL, NULL, ip, ifp, ip, NULL);
 			error = (*ifp->if_output)(ifp, m,
-			    (const struct sockaddr *)gw, ro);
+			    (const struct sockaddr *)&gw, ro);
 		} else
 			m_freem(m);
 	}
