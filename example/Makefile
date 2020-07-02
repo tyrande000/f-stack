@@ -1,4 +1,4 @@
-TOPDIR=..
+TOPDIR=/root/ironman/f-stack
 
 ifeq ($(FF_PATH),)
 	FF_PATH=${TOPDIR}

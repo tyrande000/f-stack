@@ -104,6 +104,12 @@ struct ff_freebsd_cfg {
     struct ff_freebsd_cfg *next;
 };
 
+struct listen_on
+{
+	uint16_t	len;
+	uint16_t	ports[64];
+};
+
 struct ff_config {
     char *filename;
     struct {
@@ -146,7 +152,7 @@ struct ff_config {
         struct ff_vdev_cfg *vdev_cfgs;
         struct ff_bond_cfg *bond_cfgs;
     } dpdk;
-
+    
     struct {
         int enable;
         char *kni_action;
@@ -154,6 +160,11 @@ struct ff_config {
         char *tcp_port;
         char *udp_port;
     } kni;
+
+    struct {
+        struct listen_on tcp;
+        struct listen_on udp;
+    } listen;
 
     struct {
         int level;

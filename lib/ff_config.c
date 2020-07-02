@@ -36,7 +36,7 @@
 #include "ff_config.h"
 #include "ff_ini_parser.h"
 
-#define DEFAULT_CONFIG_FILE   "/etc/f-stack.conf"
+#define DEFAULT_CONFIG_FILE   "config.ini"
 
 #define BITS_PER_HEX 4
 
@@ -547,6 +547,29 @@ bond_cfg_handler(struct ff_config *cfg, const char *section,
     return 1;
 }
 
+static void
+set_listen_ports(char *port_str, struct listen_on *listenon)
+{
+	const char delim[] = ",";
+    char *endptr;
+	char *port_tokenizer, *token, *saveptr;
+	
+	port_tokenizer = strdup(port_str);
+	if (port_tokenizer == NULL) {
+		return;
+	}
+	
+	listenon->len = 0;
+	token = strtok_r(port_tokenizer, delim, &saveptr);
+	
+	while (token != NULL) {
+		listenon->ports[listenon->len++] = strtol(token, &endptr, 10);
+		token = strtok_r(NULL, delim, &saveptr);
+	}
+	
+	free(port_tokenizer);
+}
+
 static int
 ini_parse_handler(void* user, const char* section, const char* name,
     const char* value)
@@ -597,7 +620,11 @@ ini_parse_handler(void* user, const char* section, const char* name,
         pconfig->kni.tcp_port = strdup(value);
     } else if (MATCH("kni", "udp_port")) {
         pconfig->kni.udp_port= strdup(value);
-    } else if (strcmp(section, "freebsd.boot") == 0) {
+    } else if (MATCH("listen", "tcp_port")) {
+        set_listen_ports(strdup(value), &pconfig->listen.tcp);
+    } else if (MATCH("listen", "udp_port")) {
+        set_listen_ports(strdup(value), &pconfig->listen.udp);
+    }else if (strcmp(section, "freebsd.boot") == 0) {
         if (strcmp(name, "hz") == 0) {
             pconfig->freebsd.hz = atoi(value);
         } else if (strcmp(name, "physmem") == 0) {
