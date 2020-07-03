@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdint.h>
+#include <arpa/inet.h>
 #include <getopt.h>
 #include <ctype.h>
 #include <rte_config.h>
@@ -51,6 +52,48 @@ struct option long_options[] = {
     { "proc-id", 1, NULL, 'p'},
     { 0, 0, 0, 0},
 };
+
+#define set_bit(n, m)   (n | magic_bits[m])
+
+static const int magic_bits[8] = {
+    0x80, 0x40, 0x20, 0x10,
+    0x8, 0x4, 0x2, 0x1
+};
+
+static void
+set_bitmap(uint16_t port, unsigned char *bitmap)
+{
+    port = htons(port);
+    unsigned char *p = bitmap + port/8;
+    *p = set_bit(*p, port % 8);
+}
+
+static void
+config_set_bitmap(const char *p, unsigned char *port_bitmap)
+{
+    int i;
+    const char *head, *tail, *tail_num;
+    if(!p)
+        return;
+
+    head = p;
+    while (1) {
+        tail = strstr(head, ",");
+        tail_num = strstr(head, "-");
+        if(tail_num && (!tail || tail_num < tail - 1)) {
+            for(i = atoi(head); i <= atoi(tail_num + 1); ++i) {
+                set_bitmap(i, port_bitmap);
+            }
+        } else {
+            set_bitmap(atoi(head), port_bitmap);
+        }
+
+        if(!tail)
+            break;
+
+        head = tail + 1;
+    }
+}
 
 static int
 xdigit2val(unsigned char c)
@@ -622,8 +665,10 @@ ini_parse_handler(void* user, const char* section, const char* name,
         pconfig->kni.udp_port= strdup(value);
     } else if (MATCH("listen", "tcp_port")) {
         set_listen_ports(strdup(value), &pconfig->listen.tcp);
+		config_set_bitmap(value, pconfig->listen.tcp_port_bitmap);
     } else if (MATCH("listen", "udp_port")) {
         set_listen_ports(strdup(value), &pconfig->listen.udp);
+		config_set_bitmap(value, pconfig->listen.udp_port_bitmap);
     }else if (strcmp(section, "freebsd.boot") == 0) {
         if (strcmp(name, "hz") == 0) {
             pconfig->freebsd.hz = atoi(value);

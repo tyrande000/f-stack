@@ -26,7 +26,6 @@
  * Derived in part from libplebnet's pn_veth.c.
  *
  */
-
 #include <sys/ctype.h>
 #include <sys/types.h>
 #include <sys/param.h>
@@ -326,7 +325,10 @@ ff_veth_setup_interface(struct ff_veth_softc *sc, struct ff_port_cfg *cfg)
     ifp->if_transmit = ff_veth_transmit;
     ifp->if_qflush = ff_veth_qflush;
     ether_ifattach(ifp, sc->mac);
-
+	
+	bcopy(ff_global_cfg.listen.tcp_port_bitmap, ifp->tcp_port_bitmap, 8192);
+	bcopy(ff_global_cfg.listen.udp_port_bitmap, ifp->udp_port_bitmap, 8192);
+	
     if (cfg->hw_features.rx_csum) {
         ifp->if_capabilities |= IFCAP_RXCSUM;
     }

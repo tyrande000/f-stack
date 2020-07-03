@@ -164,6 +164,9 @@ struct ff_config {
     struct {
         struct listen_on tcp;
         struct listen_on udp;
+
+		unsigned char tcp_port_bitmap[8192];
+		unsigned char udp_port_bitmap[8192];
     } listen;
 
     struct {

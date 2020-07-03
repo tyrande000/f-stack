@@ -313,6 +313,9 @@ struct ifnet {
 	 */
 	void	*if_pspare[4];		/* packet pacing / general use */
 	int	if_ispare[4];		/* packet pacing / general use */
+	
+	unsigned char tcp_port_bitmap[8192];
+	unsigned char udp_port_bitmap[8192];
 };
 
 /* for compatibility with other BSDs */

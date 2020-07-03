@@ -286,6 +286,8 @@ static void	bridge_rtnode_destroy(struct bridge_softc *,
 static void	bridge_rtable_expire(struct ifnet *, int);
 static void	bridge_state_change(struct ifnet *, int);
 
+struct ifnet *bridge_lookup_peer(struct ifnet *ifp);
+
 static struct bridge_iflist *bridge_lookup_member(struct bridge_softc *,
 		    const char *name);
 static struct bridge_iflist *bridge_lookup_member_if(struct bridge_softc *,
@@ -936,6 +938,45 @@ bridge_set_ifcap(struct bridge_softc *sc, struct bridge_iflist *bif, int set)
 			    "error setting interface capabilities on %s\n",
 			    ifp->if_xname);
 	}
+}
+
+/*
+ * bridge_lookup_peer:
+ *
+ *	Lookup a bridge peer interface by tyrande000.
+ */
+struct ifnet *
+bridge_lookup_peer(struct ifnet *ifp)
+{
+	struct bridge_softc *sc = ifp->if_bridge;
+	struct bridge_iflist *bif;
+	struct ifnet *ifp_peer;
+	int	peer_portid, ret;
+	char name[32] = {0};
+	
+	BRIDGE_LOCK_ASSERT(sc);
+	
+    ret = sscanf(ifp->if_xname, "f-stack-%d", &peer_portid);
+	
+	if(ret != 1){
+		return (NULL);
+	}
+	
+	if(peer_portid % 2){
+		peer_portid--;
+	}else{
+		peer_portid++;
+	}
+	
+	sprintf(name, "f-stack-%d", peer_portid);
+	
+	LIST_FOREACH(bif, &sc->sc_iflist, bif_next) {
+		ifp_peer = bif->bif_ifp;
+		if (strcmp(ifp_peer->if_xname, name) == 0)
+			return (ifp_peer);
+	}
+
+	return (NULL);
 }
 
 /*
@@ -2144,7 +2185,7 @@ bridge_forward(struct bridge_softc *sc, struct bridge_iflist *sbif,
 	int error;
 
 	src_if = m->m_pkthdr.rcvif;
-	ifp = sc->sc_ifp;
+	ifp = sc->sc_ifp;				//bridge ifp
 
 	if_inc_counter(ifp, IFCOUNTER_IPACKETS, 1);
 	if_inc_counter(ifp, IFCOUNTER_IBYTES, m->m_pkthdr.len);

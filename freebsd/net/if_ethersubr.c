@@ -104,6 +104,8 @@ int	(*bridge_output_p)(struct ifnet *, struct mbuf *,
 		struct sockaddr *, struct rtentry *);
 void	(*bridge_dn_p)(struct mbuf *, struct ifnet *);
 
+extern struct ifnet *bridge_lookup_peer(struct ifnet *ifp);
+
 /* if_lagg(4) support */
 struct mbuf *(*lagg_input_p)(struct ifnet *, struct mbuf *); 
 
@@ -122,10 +124,24 @@ static	int ether_requestencap(struct ifnet *, struct if_encap_req *);
 
 #define senderr(e) do { error = (e); goto bad;} while (0)
 
+#define get_bit(n, m)   (n & magic_bits[m])
+
+static const int magic_bits[8] = {
+    0x80, 0x40, 0x20, 0x10,
+    0x8, 0x4, 0x2, 0x1
+};
+
+static int
+get_bitmap(uint16_t port, unsigned char *bitmap)
+{
+    unsigned char *p = bitmap + port/8;
+    return get_bit(*p, port % 8) > 0 ? 1 : 0;
+}
+
 static int
 l4_protocol_filter(struct mbuf *m)
 {
-	struct ifnet *ifp = m->m_pkthdr.rcvif;
+	struct ifnet *ifp = m->m_pkthdr.rcvif, *ifp_dst;
 	struct ether_header *eh;
 	u_short etype;
 	
@@ -153,10 +169,14 @@ l4_protocol_filter(struct mbuf *m)
 			
 			th = mtodo(m, ETHER_HDR_LEN + hdr_len);
 			
-			if (th->th_dport == ntohs(80) || 
-				th->th_sport == ntohs(80)){
+			if (get_bitmap(th->th_dport, ifp->tcp_port_bitmap) || 
+				get_bitmap(th->th_sport, ifp->tcp_port_bitmap)){
+				ifp_dst = bridge_lookup_peer(ifp);
+				
+				KASSERT(ifp_dst != NULL, ("ifp_dst is NULL"));
+				
 				insert_ipether_map(ip->ip_src.s_addr, eh->ether_shost, ifp);
-				insert_ipether_map(ip->ip_dst.s_addr, eh->ether_dhost, NULL);
+				insert_ipether_map(ip->ip_dst.s_addr, eh->ether_dhost, ifp_dst);
 				return 0;
 			}
 		}else if (ip->ip_p == IPPROTO_UDP){

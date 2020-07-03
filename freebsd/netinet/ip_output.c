@@ -291,7 +291,7 @@ ip_output(struct mbuf *m, struct mbuf *opt, struct route *ro, int flags,
 		dst->sin_addr = ip->ip_dst;
 	}
 #endif
-
+	
 	ifp = find_ipether_ifp(ip->ip_dst.s_addr);
 	
 	if(!ifp){
