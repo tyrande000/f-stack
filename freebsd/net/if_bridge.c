@@ -2392,7 +2392,6 @@ bridge_input(struct ifnet *ifp, struct mbuf *m)
 
 		/* Perform the bridge forwarding function with the copy. */
 		bridge_forward(sc, bif, mc);
-		return NULL;		//tyrande000
 
 		/*
 		 * Reinject the mbuf as arriving on the bridge so we have a
