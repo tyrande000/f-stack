@@ -76,7 +76,9 @@
 #include <netinet/ip_carp.h>
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
+#include <netinet/udp.h>
 #endif
+
 #ifdef INET6
 #include <netinet6/nd6.h>
 #endif
@@ -165,9 +167,7 @@ l4_protocol_filter(struct mbuf *m)
 			if (m->m_len < ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct tcphdr))
 				return -1;
 			
-			struct tcphdr *th = NULL;
-			
-			th = mtodo(m, ETHER_HDR_LEN + hdr_len);
+			struct tcphdr *th = mtodo(m, ETHER_HDR_LEN + hdr_len);
 			
 			if (get_bitmap(th->th_dport, ifp->tcp_port_bitmap) || 
 				get_bitmap(th->th_sport, ifp->tcp_port_bitmap)){
@@ -180,7 +180,21 @@ l4_protocol_filter(struct mbuf *m)
 				return 0;
 			}
 		}else if (ip->ip_p == IPPROTO_UDP){
+			if (m->m_len < ETHER_HDR_LEN + sizeof(struct ip) + sizeof(struct udphdr))
+				return -1;
 			
+			struct udphdr *uh = mtodo(m, ETHER_HDR_LEN + hdr_len);
+			
+			if (get_bitmap(uh->uh_dport, ifp->udp_port_bitmap) || 
+				get_bitmap(uh->uh_sport, ifp->udp_port_bitmap)){
+				ifp_dst = bridge_lookup_peer(ifp);
+				
+				KASSERT(ifp_dst != NULL, ("ifp_dst is NULL"));
+				
+				insert_ipether_map(ip->ip_src.s_addr, eh->ether_shost, ifp);
+				insert_ipether_map(ip->ip_dst.s_addr, eh->ether_dhost, ifp_dst);
+				return 0;
+			}	
 		}
 	}
 	
