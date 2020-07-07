@@ -185,8 +185,7 @@ l4_protocol_filter(struct mbuf *m)
 			
 			struct udphdr *uh = mtodo(m, ETHER_HDR_LEN + hdr_len);
 			
-			if (get_bitmap(uh->uh_dport, ifp->udp_port_bitmap) || 
-				get_bitmap(uh->uh_sport, ifp->udp_port_bitmap)){
+			if (get_bitmap(uh->uh_dport, ifp->udp_port_bitmap)){
 				ifp_dst = bridge_lookup_peer(ifp);
 				
 				KASSERT(ifp_dst != NULL, ("ifp_dst is NULL"));
