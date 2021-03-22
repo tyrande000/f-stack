@@ -10,8 +10,10 @@
 
     # Compile DPDK
     cd /data/f-stack/dpdk
-    make config T=x86_64-native-linuxapp-gcc
-    make
+    cd dpdk/
+    meson -Denable_kmods=true build
+    ninja -C build
+    ninja -C build install
 
     # set hugepage	
     echo 1024 > /sys/kernel/mm/hugepages/hugepages-2048kB/nr_hugepages
@@ -24,8 +26,8 @@
     # insmod ko
     modprobe uio
     modprobe hwmon
-    insmod build/kmod/igb_uio.ko
-    insmod build/kmod/rte_kni.ko carrier=on
+    insmod build/kernel/linux/igb_uio/igb_uio.ko
+    insmod build/kernel/linux/kni/rte_kni.ko carrier=on
 
     # set ip address
     #redhat7.3
@@ -53,9 +55,20 @@
     sed "s/#tcp_port=80/tcp_port=80/" -i /data/f-stack/config.ini
     sed "s/#vlanstrip=1/vlanstrip=1/" -i /data/f-stack/config.ini
 
+    # Upgrade pkg-config while version < 0.28
+    cd /data/
+    wget https://pkg-config.freedesktop.org/releases/pkg-config-0.29.2.tar.gz
+    tar xzvf pkg-config-0.29.2.tar.gz
+    cd pkg-config-0.29.2
+    ./configure --with-internal-glib
+    make
+    make install
+    mv /usr/bin/pkg-config /usr/bin/pkg-config.bak
+    ln -s /usr/local/bin/pkg-config /usr/bin/pkg-config
+
     # Compile F-Stack lib
     export FF_PATH=/data/f-stack
-    export FF_DPDK=/data/f-stack/dpdk/build
+    export PKG_CONFIG_PATH=/usr/lib64/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig
     cd /data/f-stack/lib
     make
 

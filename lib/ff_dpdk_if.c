@@ -89,7 +89,6 @@ static uint8_t default_rsskey_40bytes[40] = {
     0xf3, 0x25, 0x3c, 0x06, 0x2a, 0xdc, 0x1f, 0xfc
 };
 
-static int use_rsskey_52bytes = 0;
 static uint8_t default_rsskey_52bytes[52] = {
     0x44, 0x39, 0x79, 0x6b, 0xb5, 0x4c, 0x50, 0x23,
     0xb6, 0x75, 0xea, 0x5b, 0x12, 0x4f, 0x9f, 0x30,
@@ -100,9 +99,24 @@ static uint8_t default_rsskey_52bytes[52] = {
     0x81, 0x15, 0x03, 0x66
 };
 
+static uint8_t symmetric_rsskey[52] = {
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a, 0x6d, 0x5a,
+    0x6d, 0x5a, 0x6d, 0x5a
+};
+
+static int rsskey_len = sizeof(default_rsskey_40bytes);
+static uint8_t *rsskey = default_rsskey_40bytes;
+
 struct lcore_conf lcore_conf;
 
 struct rte_mempool *pktmbuf_pool[NB_SOCKETS];
+
+static pcblddr_func_t pcblddr_fun;
 
 static struct rte_ring **dispatch_ring[RTE_MAX_ETHPORTS];
 static dispatch_func_t packet_dispatcher;
@@ -431,6 +445,8 @@ ff_msg_init(struct rte_mempool *mp,
     msg->msg_type = FF_UNKNOWN;
     msg->buf_addr = (char *)msg + sizeof(struct ff_msg);
     msg->buf_len = mp->elt_size - sizeof(struct ff_msg);
+    msg->original_buf = NULL;
+    msg->original_buf_len = 0;
 }
 
 static int
@@ -519,6 +535,8 @@ init_kni(void)
 }
 #endif
 
+//RSS reta update will failed when enable flow isolate
+#ifndef FF_FLOW_ISOLATE
 static void
 set_rss_table(uint16_t port_id, uint16_t reta_size, uint16_t nb_queues)
 {
@@ -543,6 +561,7 @@ set_rss_table(uint16_t port_id, uint16_t reta_size, uint16_t nb_queues)
             port_id);
     }
 }
+#endif
 
 static int
 init_port_start(void)
@@ -607,13 +626,15 @@ init_port_start(void)
             port_conf.rxmode.mq_mode = ETH_MQ_RX_RSS;
             port_conf.rx_adv_conf.rss_conf.rss_hf = default_rss_hf;
             if (dev_info.hash_key_size == 52) {
-                port_conf.rx_adv_conf.rss_conf.rss_key = default_rsskey_52bytes;
-                port_conf.rx_adv_conf.rss_conf.rss_key_len = 52;
-                use_rsskey_52bytes = 1;
-            } else {
-                port_conf.rx_adv_conf.rss_conf.rss_key = default_rsskey_40bytes;
-                port_conf.rx_adv_conf.rss_conf.rss_key_len = 40;
+                rsskey = default_rsskey_52bytes;
+                rsskey_len = 52;
             }
+            if (ff_global_cfg.dpdk.symmetric_rss) {
+                printf("Use symmetric Receive-side Scaling(RSS) key\n");
+                rsskey = symmetric_rsskey;
+            }
+            port_conf.rx_adv_conf.rss_conf.rss_key = rsskey;
+            port_conf.rx_adv_conf.rss_conf.rss_key_len = rsskey_len;
             port_conf.rx_adv_conf.rss_conf.rss_hf &= dev_info.flow_type_rss_offloads;
             if (port_conf.rx_adv_conf.rss_conf.rss_hf !=
                     ETH_RSS_PROTO_MASK) {
@@ -767,23 +788,15 @@ init_port_start(void)
             if (ret < 0) {
                 return ret;
             }
-
+    //RSS reta update will failed when enable flow isolate
+    #ifndef FF_FLOW_ISOLATE
             if (nb_queues > 1) {
-                /* set HW rss hash function to Toeplitz. */
-                if (!rte_eth_dev_filter_supported(port_id, RTE_ETH_FILTER_HASH)) {
-                    struct rte_eth_hash_filter_info info = {0};
-                    info.info_type = RTE_ETH_HASH_FILTER_GLOBAL_CONFIG;
-                    info.info.global_conf.hash_func = RTE_ETH_HASH_FUNCTION_TOEPLITZ;
-
-                    if (rte_eth_dev_filter_ctrl(port_id, RTE_ETH_FILTER_HASH,
-                        RTE_ETH_FILTER_SET, &info) < 0) {
-                        rte_exit(EXIT_FAILURE, "port[%d] set hash func failed\n",
-                            port_id);
-                    }
-                }
-
+                /*
+                 * FIXME: modify RSS set to FDIR
+                 */
                 set_rss_table(port_id, dev_info.reta_size, nb_queues);
             }
+    #endif
 
             /* Enable RX in promiscuous mode for the Ethernet device. */
             if (ff_global_cfg.dpdk.promiscuous) {
@@ -820,6 +833,213 @@ init_clock(void)
 
     return 0;
 }
+
+#ifdef FF_FLOW_ISOLATE
+/** Print a message out of a flow error. */
+static int
+port_flow_complain(struct rte_flow_error *error)
+{
+    static const char *const errstrlist[] = {
+        [RTE_FLOW_ERROR_TYPE_NONE] = "no error",
+        [RTE_FLOW_ERROR_TYPE_UNSPECIFIED] = "cause unspecified",
+        [RTE_FLOW_ERROR_TYPE_HANDLE] = "flow rule (handle)",
+        [RTE_FLOW_ERROR_TYPE_ATTR_GROUP] = "group field",
+        [RTE_FLOW_ERROR_TYPE_ATTR_PRIORITY] = "priority field",
+        [RTE_FLOW_ERROR_TYPE_ATTR_INGRESS] = "ingress field",
+        [RTE_FLOW_ERROR_TYPE_ATTR_EGRESS] = "egress field",
+        [RTE_FLOW_ERROR_TYPE_ATTR_TRANSFER] = "transfer field",
+        [RTE_FLOW_ERROR_TYPE_ATTR] = "attributes structure",
+        [RTE_FLOW_ERROR_TYPE_ITEM_NUM] = "pattern length",
+        [RTE_FLOW_ERROR_TYPE_ITEM_SPEC] = "item specification",
+        [RTE_FLOW_ERROR_TYPE_ITEM_LAST] = "item specification range",
+        [RTE_FLOW_ERROR_TYPE_ITEM_MASK] = "item specification mask",
+        [RTE_FLOW_ERROR_TYPE_ITEM] = "specific pattern item",
+        [RTE_FLOW_ERROR_TYPE_ACTION_NUM] = "number of actions",
+        [RTE_FLOW_ERROR_TYPE_ACTION_CONF] = "action configuration",
+        [RTE_FLOW_ERROR_TYPE_ACTION] = "specific action",
+    };
+    const char *errstr;
+    char buf[32];
+    int err = rte_errno;
+    
+    if ((unsigned int)error->type >= RTE_DIM(errstrlist) ||
+        !errstrlist[error->type])
+        errstr = "unknown type";
+    else
+        errstr = errstrlist[error->type];
+    printf("Caught error type %d (%s): %s%s: %s\n",
+           error->type, errstr,
+           error->cause ? (snprintf(buf, sizeof(buf), "cause: %p, ",
+                                    error->cause), buf) : "",
+           error->message ? error->message : "(no stated reason)",
+           rte_strerror(err));
+    return -err;
+}
+
+static int
+port_flow_isolate(uint16_t port_id, int set)
+{
+    struct rte_flow_error error;
+    
+    /* Poisoning to make sure PMDs update it in case of error. */
+    memset(&error, 0x66, sizeof(error));
+    if (rte_flow_isolate(port_id, set, &error))
+        return port_flow_complain(&error);
+    printf("Ingress traffic on port %u is %s to the defined flow rules\n",
+           port_id,
+           set ? "now restricted" : "not restricted anymore");
+    return 0;
+}
+
+static int
+create_tcp_flow(uint16_t port_id, uint16_t tcp_port) {
+  struct rte_flow_attr attr = {.ingress = 1};
+  struct ff_port_cfg *pconf = &ff_global_cfg.dpdk.port_cfgs[port_id];
+  int nb_queues = pconf->nb_lcores;
+  uint16_t queue[RTE_MAX_QUEUES_PER_PORT];
+  int i = 0, j = 0;
+  for (i = 0, j = 0; i < nb_queues; ++i)
+   queue[j++] = i;
+  struct rte_flow_action_rss rss = {
+   .types = ETH_RSS_NONFRAG_IPV4_TCP,
+   .key_len = rsskey_len,
+   .key = rsskey,
+   .queue_num = j,
+   .queue = queue,
+  };
+
+  struct rte_eth_dev_info dev_info;
+  int ret = rte_eth_dev_info_get(port_id, &dev_info);
+  if (ret != 0)
+    rte_exit(EXIT_FAILURE, "Error during getting device (port %u) info: %s\n", port_id, strerror(-ret));
+
+  struct rte_flow_item pattern[3];
+  struct rte_flow_action action[2];
+  struct rte_flow_item_tcp tcp_spec;
+  struct rte_flow_item_tcp tcp_mask = {
+          .hdr = {
+                  .src_port = RTE_BE16(0x0000),
+                  .dst_port = RTE_BE16(0xffff),
+          },
+  };
+  struct rte_flow_error error;
+
+  memset(pattern, 0, sizeof(pattern));
+  memset(action, 0, sizeof(action));
+
+  /* set the dst ipv4 packet to the required value */
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
+
+  memset(&tcp_spec, 0, sizeof(struct rte_flow_item_tcp));
+  tcp_spec.hdr.dst_port = rte_cpu_to_be_16(tcp_port);
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_TCP;
+  pattern[1].spec = &tcp_spec;
+  pattern[1].mask = &tcp_mask;
+
+  /* end the pattern array */
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
+
+  /* create the action */
+  action[0].type = RTE_FLOW_ACTION_TYPE_RSS;
+  action[0].conf = &rss;
+  action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+  struct rte_flow *flow;
+  /* validate and create the flow rule */
+  if (!rte_flow_validate(port_id, &attr, pattern, action, &error)) {
+      flow = rte_flow_create(port_id, &attr, pattern, action, &error);
+      if (!flow) {
+          return port_flow_complain(&error);
+      }
+  }
+
+  memset(pattern, 0, sizeof(pattern));
+
+  /* set the dst ipv4 packet to the required value */
+  pattern[0].type = RTE_FLOW_ITEM_TYPE_IPV4;
+
+  struct rte_flow_item_tcp tcp_src_mask = {
+          .hdr = {
+                  .src_port = RTE_BE16(0xffff),
+                  .dst_port = RTE_BE16(0x0000),
+          },
+  };
+
+  memset(&tcp_spec, 0, sizeof(struct rte_flow_item_tcp));
+  tcp_spec.hdr.src_port = rte_cpu_to_be_16(tcp_port);
+  pattern[1].type = RTE_FLOW_ITEM_TYPE_TCP;
+  pattern[1].spec = &tcp_spec;
+  pattern[1].mask = &tcp_src_mask;
+
+  /* end the pattern array */
+  pattern[2].type = RTE_FLOW_ITEM_TYPE_END;
+
+  /* validate and create the flow rule */
+  if (!rte_flow_validate(port_id, &attr, pattern, action, &error)) {
+      flow = rte_flow_create(port_id, &attr, pattern, action, &error);
+      if (!flow) {
+          return port_flow_complain(&error);
+      }
+  }
+
+  return 1;
+}
+
+static int
+init_flow(uint16_t port_id, uint16_t tcp_port) {
+  // struct ff_flow_cfg fcfg = ff_global_cfg.dpdk.flow_cfgs[0];
+
+  // int i;
+  // for (i = 0; i < fcfg.nb_port; i++) {
+  //     if(!create_tcp_flow(fcfg.port_id, fcfg.tcp_ports[i])) {
+  //         return 0;
+  //     }
+  // }
+
+  if(!create_tcp_flow(port_id, tcp_port)) {
+      rte_exit(EXIT_FAILURE, "create tcp flow failed\n");
+      return -1;
+  }
+
+  /*  ARP rule */
+  struct rte_flow_attr attr = {.ingress = 1};
+  struct rte_flow_action_queue queue = {.index = 0};
+
+  struct rte_flow_item pattern_[2];
+  struct rte_flow_action action[2];
+  struct rte_flow_item_eth eth_type = {.type = RTE_BE16(0x0806)};
+  struct rte_flow_item_eth eth_mask = {
+          .type = RTE_BE16(0xffff)
+  };
+
+  memset(pattern_, 0, sizeof(pattern_));
+  memset(action, 0, sizeof(action));
+
+  pattern_[0].type = RTE_FLOW_ITEM_TYPE_ETH;
+  pattern_[0].spec = &eth_type;
+  pattern_[0].mask = &eth_mask;
+
+  pattern_[1].type = RTE_FLOW_ITEM_TYPE_END;
+
+  /* create the action */
+  action[0].type = RTE_FLOW_ACTION_TYPE_QUEUE;
+  action[0].conf = &queue;
+  action[1].type = RTE_FLOW_ACTION_TYPE_END;
+
+  struct rte_flow *flow;
+  struct rte_flow_error error;
+  /* validate and create the flow rule */
+  if (!rte_flow_validate(port_id, &attr, pattern_, action, &error)) {
+      flow = rte_flow_create(port_id, &attr, pattern_, action, &error);
+      if (!flow) {
+          return port_flow_complain(&error);
+      }
+  }
+
+  return 1;
+}
+
+#endif
 
 int
 ff_dpdk_init(int argc, char **argv)
@@ -863,14 +1083,32 @@ ff_dpdk_init(int argc, char **argv)
 #ifdef FF_USE_PAGE_ARRAY
     ff_mmap_init();
 #endif
-
+    
+#ifdef FF_FLOW_ISOLATE 
+    // run once in primary process
+    if (0 == lcore_conf.tx_queue_id[0]){
+        ret = port_flow_isolate(0, 1);
+        if (ret < 0)
+            rte_exit(EXIT_FAILURE, "init_port_isolate failed\n");
+    }
+#endif
+    
     ret = init_port_start();
     if (ret < 0) {
         rte_exit(EXIT_FAILURE, "init_port_start failed\n");
     }
 
     init_clock();
-
+#ifdef FF_FLOW_ISOLATE
+    //Only give a example usage: port_id=0, tcp_port= 80. 
+    //Recommend: 
+    //1. init_flow should replace `set_rss_table` in `init_port_start` loop, This can set all NIC's port_id_list instead only 0 device(port_id).
+    //2. using config options `tcp_port` replace magic number of 80
+    ret = init_flow(0, 80);
+    if (ret < 0) {
+        rte_exit(EXIT_FAILURE, "init_port_flow failed\n");
+    }
+#endif
     return 0;
 }
 
@@ -904,7 +1142,7 @@ ff_veth_input(const struct ff_dpdk_if_context *ctx, struct rte_mbuf *pkt)
         data = rte_pktmbuf_mtod(pn, void*);
         len = rte_pktmbuf_data_len(pn);
 
-        void *mb = ff_mbuf_get(prev, data, len);
+        void *mb = ff_mbuf_get(prev, pn, data, len);
         if (mb == NULL) {
             ff_mbuf_free(hdr);
             rte_pktmbuf_free(pkt);
@@ -1352,17 +1590,33 @@ handle_msg(struct ff_msg *msg, uint16_t proc_id)
             handle_default_msg(msg);
             break;
     }
-    rte_ring_enqueue(msg_ring[proc_id].ring[msg->msg_type], msg);
+    if (rte_ring_enqueue(msg_ring[proc_id].ring[msg->msg_type], msg) < 0) {
+        if (msg->original_buf) {
+            rte_free(msg->buf_addr);
+            msg->buf_addr = msg->original_buf;
+            msg->buf_len = msg->original_buf_len;
+            msg->original_buf = NULL;
+        }
+
+        rte_mempool_put(message_pool, msg);
+    }
 }
 
 static inline int
-process_msg_ring(uint16_t proc_id)
+process_msg_ring(uint16_t proc_id, struct rte_mbuf **pkts_burst)
 {
-    void *msg;
-    int ret = rte_ring_dequeue(msg_ring[proc_id].ring[0], &msg);
+    /* read msg from ring buf and to process */
+    uint16_t nb_rb;
+    int i;
 
-    if (unlikely(ret == 0)) {
-        handle_msg((struct ff_msg *)msg, proc_id);
+    nb_rb = rte_ring_dequeue_burst(msg_ring[proc_id].ring[0],
+        (void **)pkts_burst, MAX_PKT_BURST, NULL);
+
+    if (likely(nb_rb == 0))
+        return 0;
+
+    for (i = 0; i < nb_rb; ++i) {
+        handle_msg((struct ff_msg *)pkts_burst[i], proc_id);
     }
 
     return 0;
@@ -1654,7 +1908,7 @@ main_loop(void *arg)
             }
         }
 
-        process_msg_ring(qconf->proc_id);
+        process_msg_ring(qconf->proc_id, pkts_burst);
 
         div_tsc = rte_rdtsc();
 
@@ -1713,7 +1967,7 @@ ff_dpdk_run(loop_func_t loop, void *arg) {
         sizeof(struct loop_routine), 0);
     lr->loop = loop;
     lr->arg = arg;
-    rte_eal_mp_remote_launch(main_loop, lr, CALL_MASTER);
+    rte_eal_mp_remote_launch(main_loop, lr, CALL_MAIN);
     rte_eal_mp_wait_lcore();
     rte_free(lr);
 }
@@ -1721,7 +1975,7 @@ ff_dpdk_run(loop_func_t loop, void *arg) {
 void
 ff_dpdk_pktmbuf_free(void *m)
 {
-    rte_pktmbuf_free((struct rte_mbuf *)m);
+    rte_pktmbuf_free_seg((struct rte_mbuf *)m);
 }
 
 static uint32_t
@@ -1745,6 +1999,33 @@ toeplitz_hash(unsigned keylen, const uint8_t *key,
         }
     }
     return (hash);
+}
+
+int
+ff_in_pcbladdr(uint16_t family, void *faddr, uint16_t fport, void *laddr)
+{
+    int ret = 0;
+    uint16_t fa;
+
+    if (!pcblddr_fun)
+        return ret;
+
+    if (family == AF_INET)
+        fa = AF_INET;
+    else if (family == AF_INET6_FREEBSD)
+        fa = AF_INET6_LINUX;
+    else
+        return EADDRNOTAVAIL;
+
+    ret = (*pcblddr_fun)(fa, faddr, fport, laddr);
+
+    return ret;
+}
+
+void
+ff_regist_pcblddr_fun(pcblddr_func_t func)
+{
+    pcblddr_fun = func;
 }
 
 int
@@ -1780,12 +2061,8 @@ ff_rss_check(void *softc, uint32_t saddr, uint32_t daddr,
     datalen += sizeof(dport);
 
     uint32_t hash = 0;
-    if ( !use_rsskey_52bytes )
-        hash = toeplitz_hash(sizeof(default_rsskey_40bytes), 
-            default_rsskey_40bytes, datalen, data);
-    else
-        hash = toeplitz_hash(sizeof(default_rsskey_52bytes), 
-	    default_rsskey_52bytes, datalen, data);
+    hash = toeplitz_hash(rsskey_len, rsskey, datalen, data);
+
     return ((hash & (reta_size - 1)) % nb_queues) == queueid;
 }
 

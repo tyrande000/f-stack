@@ -473,6 +473,21 @@ port_cfg_handler(struct ff_config *cfg, const char *section,
         return parse_port_slave_list(cur, value);
     }
 
+#ifdef INET6
+    else if (0 == strcmp(name, "addr6"))
+    {
+        cur->addr6_str = strdup(value);
+    }
+    else if (0 == strcmp(name, "prefix_len"))
+    {
+        cur->prefix_len = atoi(value);
+    }
+    else if (0 == strcmp(name, "gateway6"))
+    {
+        cur->gateway6_str = strdup(value);
+    }
+#endif
+
     return 1;
 }
 
@@ -633,6 +648,10 @@ ini_parse_handler(void* user, const char* section, const char* name,
         return parse_lcore_mask(pconfig, pconfig->dpdk.lcore_mask);
     } else if (MATCH("dpdk", "base_virtaddr")) {
         pconfig->dpdk.base_virtaddr= strdup(value);
+    } else if (MATCH("dpdk", "file_prefix")) {
+        pconfig->dpdk.file_prefix = strdup(value);
+    } else if (MATCH("dpdk", "pci_whitelist")) {
+        pconfig->dpdk.pci_whitelist = strdup(value);
     } else if (MATCH("dpdk", "port_list")) {
         return parse_port_list(pconfig, value);
     } else if (MATCH("dpdk", "nb_vdev")) {
@@ -653,6 +672,8 @@ ini_parse_handler(void* user, const char* section, const char* name,
         pconfig->dpdk.idle_sleep = atoi(value);
     } else if (MATCH("dpdk", "pkt_tx_delay")) {
         pconfig->dpdk.pkt_tx_delay = atoi(value);
+    } else if (MATCH("dpdk", "symmetric_rss")) {
+        pconfig->dpdk.symmetric_rss = atoi(value);
     } else if (MATCH("kni", "enable")) {
         pconfig->kni.enable= atoi(value);
     } else if (MATCH("kni", "kni_action")) {
@@ -734,6 +755,14 @@ dpdk_args_setup(struct ff_config *cfg)
         sprintf(temp, "--base-virtaddr=%s", cfg->dpdk.base_virtaddr);
         dpdk_argv[n++] = strdup(temp);
     }
+    if (cfg->dpdk.file_prefix) {
+        sprintf(temp, "--file-prefix=container-%s", cfg->dpdk.file_prefix);
+        dpdk_argv[n++] = strdup(temp);
+    }
+    if (cfg->dpdk.pci_whitelist) {
+        sprintf(temp, "--pci-whitelist=%s", cfg->dpdk.pci_whitelist);
+        dpdk_argv[n++] = strdup(temp);
+    }
 
     if (cfg->dpdk.nb_vdev) {
         for (i=0; i<cfg->dpdk.nb_vdev; i++) {
@@ -764,8 +793,10 @@ dpdk_args_setup(struct ff_config *cfg)
         }
         sprintf(temp, "--no-pci");
         dpdk_argv[n++] = strdup(temp);
-        sprintf(temp, "--file-prefix=container");
-        dpdk_argv[n++] = strdup(temp);
+        if (!cfg->dpdk.file_prefix) {
+            sprintf(temp, "--file-prefix=container");
+            dpdk_argv[n++] = strdup(temp);
+        }
     }
 
     if (cfg->dpdk.nb_bond) {

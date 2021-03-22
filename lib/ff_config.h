@@ -61,6 +61,13 @@ struct ff_port_cfg {
     char *netmask;
     char *broadcast;
     char *gateway;
+
+#ifdef INET6
+        char *addr6_str;
+        char *gateway6_str;
+        uint8_t prefix_len;
+#endif
+
     char *pcap;
     uint16_t snaplen;
     uint32_t savelen;
@@ -122,6 +129,12 @@ struct ff_config {
         /* specify base virtual address to map. */
         char *base_virtaddr;
 
+        /* allow processes that do not want to co-operate to have different memory regions */
+        char *file_prefix;
+
+        /* load an external driver */
+        char *pci_whitelist;
+
         int nb_channel;
         int memory;
         int no_huge;
@@ -134,6 +147,7 @@ struct ff_config {
         int tso;
         int tx_csum_offoad_skip;
         int vlan_strip;
+        int symmetric_rss;
 
         /* sleep x microseconds when no pkts incomming */
         unsigned idle_sleep;

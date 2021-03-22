@@ -2,6 +2,18 @@
 
 Compile ff tools
 
+    # Upgrade pkg-config while version < 0.28
+    #wget https://pkg-config.freedesktop.org/releases/pkg-config-0.29.2.tar.gz
+    #tar xzvf pkg-config-0.29.2.tar.gz
+    #cd pkg-config-0.29.2
+    #./configure --with-internal-glib
+    #make
+    #make install
+    #mv /usr/bin/pkg-config /usr/bin/pkg-config.bak
+    #ln -s /usr/local/bin/pkg-config /usr/bin/pkg-config
+
+    export PKG_CONFIG_PATH=/usr/lib64/pkgconfig:/usr/local/lib64/pkgconfig:/usr/lib/pkgconfig
+
     make
 
 Install ff tools, all ff tools will be installed to `/usr/local/bin/f-stack/`, and some soft link will be created in `/usr/local/bin`, such as `ff_top`,`ff_traffic`, etc.
@@ -262,6 +274,20 @@ Examples:
 |    total|              163960|            15412206|              327924|           128054322|
 |         |                    |                    |                    |                    |
 ```
+
+# ndp
+Usage:
+```
+ndp -C <f-stack proc_id> [-nt] hostname
+ndp -C <f-stack proc_id> [-nt] -a | -c | -p | -r | -H | -P | -R
+ndp -C <f-stack proc_id> [-nt] -A wait
+ndp -C <f-stack proc_id> [-nt] -d hostname
+ndp -C <f-stack proc_id> [-nt] -f filename
+ndp -C <f-stack proc_id> [-nt] -i interface [flags...]
+ndp -C <f-stack proc_id> [-nt] -I [interface|delete]
+ndp -C <f-stack proc_id> [-nt] -s nodename etheraddr [temp] [proxy]
+```
+For more details, see [Manual page](https://www.freebsd.org/cgi/man.cgi?ndp).
 
 # how to implement a custom tool for communicating with F-Stack process
 

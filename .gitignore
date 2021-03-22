@@ -8,6 +8,7 @@
 *.swap
 *.pcap
 dpdk/x86_64-native-linuxapp-gcc/
+dpdk/build/
 example/helloworld
 example/helloworld_epoll
 lib/bus_if.h
@@ -28,3 +29,4 @@ app/nginx-1.16.0/Makefile
 dpdk/.ci/
 dpdk/.travis.yml
 .vscode/
+.code.yml
